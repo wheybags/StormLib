@@ -95,6 +95,8 @@ extern "C" {
 //  Z - S for static-linked CRT library, D for multithreaded DLL CRT library
 //
 
+// We just want StormLib.lib
+/*
 #if defined(_MSC_VER) && !defined(__STORMLIB_SELF__)
   
   #ifdef _DEBUG                                 // DEBUG VERSIONS
@@ -128,6 +130,7 @@ extern "C" {
   #endif
 
 #endif
+*/
 
 //-----------------------------------------------------------------------------
 // Defines
