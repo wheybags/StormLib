@@ -1,11 +1,11 @@
 /*****************************************************************************/
-/* StormLibTest.cpp                       Copyright (c) Ladislav Zezula 2003 */
+/* StormTest.cpp                          Copyright (c) Ladislav Zezula 2003 */
 /*---------------------------------------------------------------------------*/
 /* Test module for StormLib                                                  */
 /*---------------------------------------------------------------------------*/
 /*   Date    Ver   Who  Comment                                              */
 /* --------  ----  ---  -------                                              */
-/* 25.03.03  1.00  Lad  The first version of StormLibTest.cpp                */
+/* 25.03.03  1.00  Lad  The first version of StormTest.cpp                   */
 /*****************************************************************************/
 
 #define _CRT_NON_CONFORMING_SWPRINTFS
@@ -87,7 +87,7 @@ static DWORD AddFlags[] =
     0xFFFFFFFF
 };
 
-static DWORD Compressions[] = 
+static DWORD WaveCompressions[] = 
 {
     MPQ_COMPRESSION_ADPCM_MONO | MPQ_COMPRESSION_HUFFMANN,
     MPQ_COMPRESSION_ADPCM_STEREO | MPQ_COMPRESSION_HUFFMANN,
@@ -1470,11 +1470,17 @@ static TFileData * LoadMpqFile(TLogHelper * pLogger, HANDLE hMpq, const char * s
             nError = pLogger->PrintError("Failed to read the content of the file %s", szFileName);
     }
 
+    // If failed, free the buffer
+    if(nError != ERROR_SUCCESS)
+    {
+        STORM_FREE(pFileData);
+        SetLastError(nError);
+        pFileData = NULL;
+    }
+
     // Close the file and return what we got
     if(hFile != NULL)
         SFileCloseFile(hFile);
-    if(nError != ERROR_SUCCESS)
-        SetLastError(nError);
     return pFileData;
 }
 
@@ -1544,6 +1550,9 @@ static int SearchArchive(
         // Increment number of files
         dwFileCount++;
 
+//      if(!_stricmp(sf.cFileName, "OldWorld\\world\\maps\\Northrend\\Northrend.tex"))
+//          DebugBreak();
+
         if(dwTestFlags & TEST_FLAG_MOST_PATCHED)
         {
             // Load the patch count
@@ -1562,26 +1571,23 @@ static int SearchArchive(
         {
             // Load the entire file to the MPQ
             pFileData = LoadMpqFile(pLogger, hMpq, sf.cFileName);
-            if(pFileData == NULL)
+            if(pFileData != NULL)
             {
-                nError = pLogger->PrintError("Failed to load the file %s", sf.cFileName);
-                break;
-            }
+                // Hash the file data, if needed
+                if((dwTestFlags & TEST_FLAG_HASH_FILES) && !IsInternalMpqFileName(sf.cFileName))
+                    md5_process(&md5state, pFileData->FileData, pFileData->dwFileSize);
 
-            // Hash the file data, if needed
-            if((dwTestFlags & TEST_FLAG_HASH_FILES) && !IsInternalMpqFileName(sf.cFileName))
-                md5_process(&md5state, pFileData->FileData, pFileData->dwFileSize);
-
-            // Play sound files, if required
-            if((dwTestFlags & TEST_FLAG_PLAY_WAVES) && strstr(sf.cFileName, ".wav") != NULL)
-            {
+                // Play sound files, if required
+                if((dwTestFlags & TEST_FLAG_PLAY_WAVES) && strstr(sf.cFileName, ".wav") != NULL)
+                {
 #ifdef _MSC_VER
-                pLogger->PrintProgress("Playing sound %s", sf.cFileName);
-                PlaySound((LPCTSTR)pFileData->FileData, NULL, SND_MEMORY);
+                    pLogger->PrintProgress("Playing sound %s", sf.cFileName);
+                    PlaySound((LPCTSTR)pFileData->FileData, NULL, SND_MEMORY);
 #endif
-            }
+                }
 
-            STORM_FREE(pFileData);
+                STORM_FREE(pFileData);
+            }
         }
 
         bFound = SFileFindNextFile(hFind, &sf);
@@ -1609,9 +1615,6 @@ static int CreateNewArchive(TLogHelper * pLogger, const char * szPlainName, DWOR
     CreateFullPathName(szFullPath, NULL, szPlainName);
     remove(szFullPath);
 
-    // Fix the flags
-    dwCreateFlags |= (MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES);
-
     // Create the new MPQ
     CopyFileName(szMpqName, szFullPath, strlen(szFullPath));
     if(!SFileCreateArchive(szMpqName, dwCreateFlags, dwMaxFileCount, &hMpq))
@@ -1625,6 +1628,44 @@ static int CreateNewArchive(TLogHelper * pLogger, const char * szPlainName, DWOR
 
     return ERROR_SUCCESS;
 }
+
+static int CreateNewArchive_V2(TLogHelper * pLogger, const char * szPlainName, DWORD dwCreateFlags, DWORD dwMaxFileCount, HANDLE * phMpq)
+{
+    SFILE_CREATE_MPQ CreateInfo;
+    HANDLE hMpq = NULL;
+    TCHAR szMpqName[MAX_PATH];
+    char szFullPath[MAX_PATH];
+
+    // Make sure that the MPQ is deleted
+    CreateFullPathName(szFullPath, NULL, szPlainName);
+    CopyFileName(szMpqName, szFullPath, strlen(szFullPath));
+    remove(szFullPath);
+
+    // Fill the create structure
+    memset(&CreateInfo, 0, sizeof(SFILE_CREATE_MPQ));
+    CreateInfo.cbSize         = sizeof(SFILE_CREATE_MPQ);
+    CreateInfo.dwMpqVersion   = (dwCreateFlags & MPQ_CREATE_ARCHIVE_VMASK) >> FLAGS_TO_FORMAT_SHIFT;
+    CreateInfo.dwStreamFlags  = STREAM_PROVIDER_FLAT | BASE_PROVIDER_FILE;
+    CreateInfo.dwFileFlags1   = (dwCreateFlags & MPQ_CREATE_LISTFILE)   ? MPQ_FILE_EXISTS : 0;
+    CreateInfo.dwFileFlags2   = (dwCreateFlags & MPQ_CREATE_ATTRIBUTES) ? MPQ_FILE_EXISTS : 0;
+    CreateInfo.dwAttrFlags    = (dwCreateFlags & MPQ_CREATE_ATTRIBUTES) ? (MPQ_ATTRIBUTE_CRC32 | MPQ_ATTRIBUTE_FILETIME | MPQ_ATTRIBUTE_MD5) : 0;
+    CreateInfo.dwSectorSize   = (CreateInfo.dwMpqVersion >= MPQ_FORMAT_VERSION_3) ? 0x4000 : 0x1000;
+    CreateInfo.dwRawChunkSize = (CreateInfo.dwMpqVersion >= MPQ_FORMAT_VERSION_4) ? 0x4000 : 0;
+    CreateInfo.dwMaxFileCount = dwMaxFileCount;
+
+    // Create the new MPQ
+    if(!SFileCreateArchive2(szMpqName, &CreateInfo, &hMpq))
+        return pLogger->PrintError(_T("Failed to create archive %s"), szMpqName);
+
+    // Shall we close it right away?
+    if(phMpq == NULL)
+        SFileCloseArchive(hMpq);
+    else
+        *phMpq = hMpq;
+
+    return ERROR_SUCCESS;
+}
+
 
 // Creates new archive with UNICODE name. Adds prefix to the name
 static int CreateNewArchiveU(TLogHelper * pLogger, const wchar_t * szPlainName, DWORD dwCreateFlags, DWORD dwMaxFileCount)
@@ -2049,7 +2090,7 @@ static int TestReadFile_MasterMirror(const char * szMirrorName, const char * szM
 // Test of the TFileStream object
 static int TestFileStreamOperations(const char * szPlainName, DWORD dwStreamFlags)
 {
-    TFileStream * pStream;
+    TFileStream * pStream = NULL;
     TLogHelper Logger("FileStreamTest", szPlainName);
     ULONGLONG ByteOffset;
     ULONGLONG FileSize = 0;
@@ -2267,6 +2308,12 @@ static int TestOpenArchive(const char * szPlainName, const char * szListFile = N
     }
 
     return nError;
+}
+
+static int TestOpenArchive_WillFail(const char * szPlainName, const char * szListFile = NULL)
+{
+    TestOpenArchive(szPlainName, szListFile);
+    return ERROR_SUCCESS;
 }
 
 static int TestOpenArchive_Corrupt(const char * szPlainName)
@@ -2620,6 +2667,43 @@ static int TestOpenArchive_CraftedUserData(const char * szPlainName, const char 
     return nError;
 }
 
+
+static int TestOpenArchive_CompactingTest(const char * szPlainName, const char * szListFile)
+{
+    TLogHelper Logger("CompactingTest", szPlainName);
+    HANDLE hMpq = NULL;
+    char szFullListName[MAX_PATH];
+    int nError = ERROR_SUCCESS;
+
+    // Create copy of the listfile
+    if(szListFile != NULL)
+    {
+        nError = CreateFileCopy(&Logger, szListFile, szListFile, szFullListName, 0, 0);
+        szListFile = szFullListName;
+    }
+
+    // Create copy of the archive
+    if(nError == ERROR_SUCCESS)
+    {
+        nError = OpenExistingArchiveWithCopy(&Logger, szPlainName, szPlainName, &hMpq);
+    }
+
+    if(nError == ERROR_SUCCESS)
+    {
+        // Compact the archive
+        Logger.PrintProgress("Compacting archive %s ...", szPlainName);
+        if(!SFileSetCompactCallback(hMpq, CompactCallback, &Logger))
+            nError = Logger.PrintError("Failed to set the compact callback");
+
+        if(!SFileCompactArchive(hMpq, szListFile, false))
+            nError = Logger.PrintError("Failed to compact archive %s", szPlainName);
+        
+        SFileCloseArchive(hMpq);
+    }
+
+    return nError;
+}
+
 static int ForEachFile_VerifyFileChecksum(const char * szFullPath)
 {
     const char * szShortPlainName = GetShortPlainName(szFullPath);
@@ -2775,7 +2859,7 @@ static int TestCreateArchive_EmptyMpq(const char * szPlainName, DWORD dwCreateFl
     TLogHelper Logger("CreateEmptyMpq", szPlainName);
     HANDLE hMpq = NULL;
     DWORD dwFileCount = 0;
-    int nError;
+    int nError;                                                     
 
     // Create the full path name
     nError = CreateNewArchive(&Logger, szPlainName, dwCreateFlags, 0, &hMpq);
@@ -2803,7 +2887,35 @@ static int TestCreateArchive_EmptyMpq(const char * szPlainName, DWORD dwCreateFl
     return nError;
 }
 
-static int TestCreateArchive_FillArchive(const char * szPlainName)
+static int TestCreateArchive_MpqEditor(const char * szPlainName, const char * szFileName)
+{
+    TLogHelper Logger("CreateMpqEditor", szPlainName);
+    HANDLE hMpq = NULL;
+    int nError = ERROR_SUCCESS;
+
+    // Create new MPQ
+    nError = CreateNewArchive_V2(&Logger, szPlainName, MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES, 4000, &hMpq);
+    if(nError == ERROR_SUCCESS)
+    {
+        // Flush the archive first
+        SFileFlushArchive(hMpq);
+
+        // Add one file
+        nError = AddFileToMpq(&Logger, hMpq, szFileName, "This is the file data.", MPQ_FILE_COMPRESS);
+
+        // Flush the archive again
+        SFileFlushArchive(hMpq);
+        SFileCloseArchive(hMpq);
+    }
+    else
+    {
+        nError = GetLastError();
+    }
+
+    return nError;
+}
+
+static int TestCreateArchive_FillArchive(const char * szPlainName, DWORD dwCreateFlags)
 {
     TLogHelper Logger("CreateFullMpq", szPlainName);
     const char * szFileData = "TestCreateArchive_FillArchive: Testing file data";
@@ -2814,19 +2926,31 @@ static int TestCreateArchive_FillArchive(const char * szPlainName)
     DWORD dwFlags = MPQ_FILE_ENCRYPTED | MPQ_FILE_COMPRESS;
     int nError;
 
-    // Create the new MPQ
-    nError = CreateNewArchive(&Logger, szPlainName, 0, dwMaxFileCount, &hMpq);
+    // Note that StormLib will round the maxfile count
+    // up to hash table size (nearest power of two)
+    if((dwCreateFlags & MPQ_CREATE_LISTFILE) == 0)
+        dwMaxFileCount++;
+    if((dwCreateFlags & MPQ_CREATE_ATTRIBUTES) == 0)
+        dwMaxFileCount++;
 
-    // Now we should be able to add 6 files
+    // Create the new MPQ archive
+    nError = CreateNewArchive_V2(&Logger, szPlainName, dwCreateFlags, dwMaxFileCount, &hMpq);
     if(nError == ERROR_SUCCESS)
     {
-        for(DWORD i = 0; i < dwMaxFileCount; i++)
+        // Flush the archive first
+        SFileFlushArchive(hMpq);
+
+        // Add all files
+        for(unsigned int i = 0; i < dwMaxFileCount; i++)
         {
             sprintf(szFileName, "AddedFile%03u.txt", i);
             nError = AddFileToMpq(&Logger, hMpq, szFileName, szFileData, dwFlags, dwCompression);
             if(nError != ERROR_SUCCESS)
                 break;
         }
+
+        // Flush the archive again
+        SFileFlushArchive(hMpq);
     }
 
     // Now the MPQ should be full. It must not be possible to add another file
@@ -2849,33 +2973,34 @@ static int TestCreateArchive_FillArchive(const char * szPlainName)
     // The archive should still be full
     if(nError == ERROR_SUCCESS)
     {
-        CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, true);
-        CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, true);
-        AddFileToMpq(&Logger, hMpq, "ShouldNotBeHere.txt", szFileData, MPQ_FILE_COMPRESS, MPQ_COMPRESSION_ZLIB, false);
+        CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, (dwCreateFlags & MPQ_CREATE_LISTFILE) ? true : false);
+        CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, (dwCreateFlags & MPQ_CREATE_ATTRIBUTES) ? true : false);
+        nError = AddFileToMpq(&Logger, hMpq, "ShouldNotBeHere.txt", szFileData, MPQ_FILE_COMPRESS, MPQ_COMPRESSION_ZLIB, false);
+        assert(nError != ERROR_SUCCESS);
+        nError = ERROR_SUCCESS;
     }
 
     // The (listfile) must be present
     if(nError == ERROR_SUCCESS)
     {
-        CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, true);
-        CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, true);
+        CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, (dwCreateFlags & MPQ_CREATE_LISTFILE) ? true : false);
+        CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, (dwCreateFlags & MPQ_CREATE_ATTRIBUTES) ? true : false);
         nError = RemoveMpqFile(&Logger, hMpq, szFileName, true);
     }
 
     // Now add the file again. This time, it should be possible OK
     if(nError == ERROR_SUCCESS)
     {
-        CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, false);
-        CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, false);
         nError = AddFileToMpq(&Logger, hMpq, szFileName, szFileData, dwFlags, dwCompression, true);
+        assert(nError == ERROR_SUCCESS);
     }
 
     // Now add the file again. This time, it should be fail
     if(nError == ERROR_SUCCESS)
     {
-        CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, false);
-        CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, false);
-        AddFileToMpq(&Logger, hMpq, szFileName, szFileData, dwFlags, dwCompression, false);
+        nError = AddFileToMpq(&Logger, hMpq, szFileName, szFileData, dwFlags, dwCompression, false);
+        assert(nError != ERROR_SUCCESS);
+        nError = ERROR_SUCCESS;
     }
 
     // Close the archive and return
@@ -2889,8 +3014,8 @@ static int TestCreateArchive_FillArchive(const char * szPlainName)
         nError = OpenExistingArchiveWithCopy(&Logger, NULL, szPlainName, &hMpq);
         if(nError == ERROR_SUCCESS)
         {
-            CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, true);
-            CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, true);
+            CheckIfFileIsPresent(&Logger, hMpq, LISTFILE_NAME, (dwCreateFlags & MPQ_CREATE_LISTFILE) ? true : false);
+            CheckIfFileIsPresent(&Logger, hMpq, ATTRIBUTES_NAME, (dwCreateFlags & MPQ_CREATE_ATTRIBUTES) ? true : false);
             SFileCloseArchive(hMpq);
         }
     }
@@ -2908,7 +3033,7 @@ static int TestCreateArchive_IncMaxFileCount(const char * szPlainName)
     int nError;
 
     // Create the new MPQ
-    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V4, dwMaxFileCount, &hMpq);
+    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V4 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES, dwMaxFileCount, &hMpq);
 
     // Now add exactly one file
     if(nError == ERROR_SUCCESS)
@@ -2922,7 +3047,7 @@ static int TestCreateArchive_IncMaxFileCount(const char * szPlainName)
     // we increment the max file count
     if(nError == ERROR_SUCCESS)
     {
-        for(DWORD i = 0; i < 10; i++)
+        for(unsigned int i = 0; i < 10; i++)
         {
             // Open the archive again
             nError = OpenExistingArchiveWithCopy(&Logger, NULL, szPlainName, &hMpq);
@@ -2958,29 +3083,30 @@ static int TestCreateArchive_IncMaxFileCount(const char * szPlainName)
 static int TestCreateArchive_UnicodeNames()
 {
     TLogHelper Logger("MpqUnicodeName");
+    DWORD dwCreateFlags = MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES;
     int nError = ERROR_SUCCESS;
 
-    nError = CreateNewArchiveU(&Logger, szUnicodeName1, MPQ_CREATE_ARCHIVE_V1, 15);
+    nError = CreateNewArchiveU(&Logger, szUnicodeName1, dwCreateFlags | MPQ_CREATE_ARCHIVE_V1, 15);
     if(nError != ERROR_SUCCESS)
         return nError;
 
-    nError = CreateNewArchiveU(&Logger, szUnicodeName2, MPQ_CREATE_ARCHIVE_V2, 58);
+    nError = CreateNewArchiveU(&Logger, szUnicodeName2, dwCreateFlags | MPQ_CREATE_ARCHIVE_V2, 58);
     if(nError != ERROR_SUCCESS)
         return nError;
 
-    nError = CreateNewArchiveU(&Logger, szUnicodeName3, MPQ_CREATE_ARCHIVE_V3, 15874);
+    nError = CreateNewArchiveU(&Logger, szUnicodeName3, dwCreateFlags | MPQ_CREATE_ARCHIVE_V3, 15874);
     if(nError != ERROR_SUCCESS)
         return nError;
 
-    nError = CreateNewArchiveU(&Logger, szUnicodeName4, MPQ_CREATE_ARCHIVE_V4, 87541);
+    nError = CreateNewArchiveU(&Logger, szUnicodeName4, dwCreateFlags | MPQ_CREATE_ARCHIVE_V4, 87541);
     if(nError != ERROR_SUCCESS)
         return nError;
 
-    nError = CreateNewArchiveU(&Logger, szUnicodeName5, MPQ_CREATE_ARCHIVE_V3, 87541);
+    nError = CreateNewArchiveU(&Logger, szUnicodeName5, dwCreateFlags | MPQ_CREATE_ARCHIVE_V3, 87541);
     if(nError != ERROR_SUCCESS)
         return nError;
 
-    nError = CreateNewArchiveU(&Logger, szUnicodeName5, MPQ_CREATE_ARCHIVE_V2, 87541);
+    nError = CreateNewArchiveU(&Logger, szUnicodeName5, dwCreateFlags | MPQ_CREATE_ARCHIVE_V2, 87541);
     if(nError != ERROR_SUCCESS)
         return nError;
 
@@ -3011,7 +3137,7 @@ static int TestCreateArchive_FileFlagTest(const char * szPlainName)
 
     // Create new MPQ archive over that file
     if(nError == ERROR_SUCCESS)
-        nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V1, 17, &hMpq);
+        nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V1 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES, 17, &hMpq);
 
     // Add the same file multiple times
     if(nError == ERROR_SUCCESS)
@@ -3145,32 +3271,31 @@ static int TestCreateArchive_FileFlagTest(const char * szPlainName)
     return nError;
 }
 
-static int TestCreateArchive_CompressionsTest(const char * szPlainName)
+static int TestCreateArchive_WaveCompressionsTest(const char * szPlainName, const char * szWaveFile)
 {
     TLogHelper Logger("CompressionsTest", szPlainName);
     HANDLE hMpq = NULL;                 // Handle of created archive 
     char szFileName[MAX_PATH];          // Source file to be added
     char szArchivedName[MAX_PATH];
-    DWORD dwCmprCount = sizeof(Compressions) / sizeof(DWORD);
+    DWORD dwCmprCount = sizeof(WaveCompressions) / sizeof(DWORD);
     DWORD dwAddedFiles = 0;
     DWORD dwFoundFiles = 0;
-    DWORD i;
     int nError;
 
     // Create paths for local file to be added
-    CreateFullPathName(szFileName, szMpqSubDir, "AddFile.wav");
+    CreateFullPathName(szFileName, szMpqSubDir, szWaveFile);
 
     // Create new archive
-    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V4, 0x40, &hMpq); 
+    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V1 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES, 0x40, &hMpq); 
 
     // Add the same file multiple times
     if(nError == ERROR_SUCCESS)
     {
         Logger.UserTotal = dwCmprCount;
-        for(i = 0; i < dwCmprCount; i++)
+        for(unsigned int i = 0; i < dwCmprCount; i++)
         {
             sprintf(szArchivedName, "WaveFile_%02u.wav", i + 1);
-            nError = AddLocalFileToMpq(&Logger, hMpq, szArchivedName, szFileName, MPQ_FILE_COMPRESS | MPQ_FILE_ENCRYPTED | MPQ_FILE_SECTOR_CRC, Compressions[i]);
+            nError = AddLocalFileToMpq(&Logger, hMpq, szArchivedName, szFileName, MPQ_FILE_COMPRESS | MPQ_FILE_ENCRYPTED | MPQ_FILE_SECTOR_CRC, WaveCompressions[i]);
             if(nError != ERROR_SUCCESS)
                 break;
 
@@ -3217,7 +3342,7 @@ static int TestCreateArchive_ListFilePos(const char * szPlainName)
     int nError;
 
     // Create a new archive with the limit of 0x20 files
-    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V4, dwMaxFileCount, &hMpq);
+    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V4 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES, dwMaxFileCount, &hMpq);
 
     // Add 0x1E files
     if(nError == ERROR_SUCCESS)
@@ -3306,7 +3431,7 @@ static int TestCreateArchive_BigArchive(const char * szPlainName)
     int nError;
 
     // Create a new archive with the limit of 0x20 files
-    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V3, dwMaxFileCount, &hMpq);
+    nError = CreateNewArchive(&Logger, szPlainName, MPQ_CREATE_ARCHIVE_V3 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES, dwMaxFileCount, &hMpq);
     if(nError == ERROR_SUCCESS)
     {
         // Now add few really big files
@@ -3429,8 +3554,8 @@ int main(int argc, char * argv[])
 //      nError = FindFilePairs(ForEachFile_CreateArchiveLink, "2004 - WoW\\06080", "2004 - WoW\\06299");
 
     // Search all testing archives and verify their SHA1 hash
-    if(nError == ERROR_SUCCESS)
-        nError = FindFiles(ForEachFile_VerifyFileChecksum, szMpqSubDir);
+//  if(nError == ERROR_SUCCESS)
+//      nError = FindFiles(ForEachFile_VerifyFileChecksum, szMpqSubDir);
 
     // Test reading linear file without bitmap
     if(nError == ERROR_SUCCESS)
@@ -3481,8 +3606,8 @@ int main(int argc, char * argv[])
         nError = TestReadFile_MasterMirror("MPQ_2013_v4_alternate-complete.MPQ", "MPQ_2013_v4_alternate-original.MPQ", true);
 
     // Open a stream, paired with remote master (takes hell lot of time!)
-    if(nError == ERROR_SUCCESS)
-        nError = TestReadFile_MasterMirror("MPQ_2013_v4_alternate-downloaded.MPQ", "http://www.zezula.net\\mpqs\\alternate.zip", false);
+//  if(nError == ERROR_SUCCESS)
+//      nError = TestReadFile_MasterMirror("MPQ_2013_v4_alternate-downloaded.MPQ", "http://www.zezula.net\\mpqs\\alternate.zip", false);
 
     // Search in listfile
     if(nError == ERROR_SUCCESS)
@@ -3512,7 +3637,7 @@ int main(int argc, char * argv[])
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive("MPQ_2011_v4_InvalidHetEntryCount.MPQ");
 
-    // Open an truncated archive
+    // Open a truncated archive
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive("MPQ_2002_v1_BlockTableCut.MPQ");
 
@@ -3531,6 +3656,21 @@ int main(int argc, char * argv[])
     // Open a MPQ that actually has user data
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive("MPQ_2010_v2_HasUserData.s2ma");
+
+    // Open an Warcraft III map locked by the Spazzler protector
+    if(nError == ERROR_SUCCESS)
+        nError = TestOpenArchive("MPQ_2002_v1_ProtectedMap_Spazzler.w3x");
+
+    if(nError == ERROR_SUCCESS)
+        nError = TestOpenArchive("MPQ_2014_v1_ProtectedMap_Spazzler2.w3x");
+
+    // Open an Warcraft III map locked by the BOBA protector
+    if(nError == ERROR_SUCCESS)
+        nError = TestOpenArchive("MPQ_2002_v1_ProtectedMap_BOBA.w3m");
+
+    // Open an Warcraft III map whose "(attributes)" file has (BlockTableSize-1) entries
+    if(nError == ERROR_SUCCESS)
+        nError = TestOpenArchive("MPQ_2014_v1_AttributesOneEntryLess.w3x");
 
     // Open a MPQ archive v 3.0
     if(nError == ERROR_SUCCESS)
@@ -3551,6 +3691,10 @@ int main(int argc, char * argv[])
     // Open a partial MPQ with compressed hash table
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive("part-file://MPQ_2010_v2_HashTableCompressed.MPQ.part");
+
+    // Open the multi-file archive with wrong prefix to see how StormLib deals with it
+    if(nError == ERROR_SUCCESS)
+        nError = TestOpenArchive_WillFail("flat-file://streaming/model.MPQ.0");
 
     // Open an archive that is merged with multiple files
     if(nError == ERROR_SUCCESS)
@@ -3608,13 +3752,16 @@ int main(int argc, char * argv[])
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive_CraftedUserData("MPQ_2010_v3_expansion-locale-frFR.MPQ", "StormLibTest_CraftedMpq1_v3.mpq");
 
-    // Open a MPQ (add custom user data to it
+    // Open a MPQ (add custom user data to it)
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive_CraftedUserData("MPQ_2013_v4_SC2_EmptyMap.SC2Map", "StormLibTest_CraftedMpq2_v4.mpq");
 
     // Open a MPQ (add custom user data to it)
     if(nError == ERROR_SUCCESS)
         nError = TestOpenArchive_CraftedUserData("MPQ_2013_v4_expansion1.MPQ", "StormLibTest_CraftedMpq3_v4.mpq");
+
+//  if(nError == ERROR_SUCCESS)
+//      nError = TestOpenArchive_CompactingTest("MPQ_2014_v1_CompactTest.w3x", "ListFile_Blizzard.txt");
 
     // Test modifying file with no (listfile) and no (attributes)
     if(nError == ERROR_SUCCESS)
@@ -3624,17 +3771,34 @@ int main(int argc, char * argv[])
     if(nError == ERROR_SUCCESS)
         nError = TestAddFile_ListFileTest("MPQ_2013_v4_SC2_EmptyMap.SC2Map", true, true);
 
+    // Test archive compacting
     // Create an empty archive v2
     if(nError == ERROR_SUCCESS)
-        nError = TestCreateArchive_EmptyMpq("StormLibTest_EmptyMpq_v2.mpq", MPQ_CREATE_ARCHIVE_V2);
+        nError = TestCreateArchive_EmptyMpq("StormLibTest_EmptyMpq_v2.mpq", MPQ_CREATE_ARCHIVE_V2 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES);
                                                             
     // Create an empty archive v4
     if(nError == ERROR_SUCCESS)
-        nError = TestCreateArchive_EmptyMpq("StormLibTest_EmptyMpq_v4.mpq", MPQ_CREATE_ARCHIVE_V4);
+        nError = TestCreateArchive_EmptyMpq("StormLibTest_EmptyMpq_v4.mpq", MPQ_CREATE_ARCHIVE_V4 | MPQ_CREATE_LISTFILE | MPQ_CREATE_ATTRIBUTES);
+
+    // Test creating of an archive the same way like MPQ Editor does
+    if(nError == ERROR_SUCCESS)
+        nError = TestCreateArchive_MpqEditor("StormLibTest_MpqEditorTest.mpq", "AddedFile.exe");
 
     // Create an archive and fill it with files up to the max file count
     if(nError == ERROR_SUCCESS)
-        nError = TestCreateArchive_FillArchive("StormLibTest_FileTableFull.mpq");
+        nError = TestCreateArchive_FillArchive("StormLibTest_FileTableFull.mpq", 0);
+
+    // Create an archive and fill it with files up to the max file count
+    if(nError == ERROR_SUCCESS)
+        nError = TestCreateArchive_FillArchive("StormLibTest_FileTableFull.mpq", MPQ_CREATE_LISTFILE);
+
+    // Create an archive and fill it with files up to the max file count
+    if(nError == ERROR_SUCCESS)
+        nError = TestCreateArchive_FillArchive("StormLibTest_FileTableFull.mpq", MPQ_CREATE_ATTRIBUTES);
+
+    // Create an archive and fill it with files up to the max file count
+    if(nError == ERROR_SUCCESS)
+        nError = TestCreateArchive_FillArchive("StormLibTest_FileTableFull.mpq", MPQ_CREATE_ATTRIBUTES | MPQ_CREATE_LISTFILE);
 
     // Create an archive, and increment max file count several times
     if(nError == ERROR_SUCCESS)
@@ -3648,9 +3812,17 @@ int main(int argc, char * argv[])
     if(nError == ERROR_SUCCESS)
         nError = TestCreateArchive_FileFlagTest("StormLibTest_FileFlagTest.mpq");
 
-    // Create a MPQ file, add files with various compressions
+    // Create a MPQ file, add a mono-WAVE file with various compressions
     if(nError == ERROR_SUCCESS)
-        nError = TestCreateArchive_CompressionsTest("StormLibTest_CompressionTest.mpq");
+        nError = TestCreateArchive_WaveCompressionsTest("StormLibTest_AddWaveMonoTest.mpq", "AddFile-Mono.wav");
+
+    // Create a MPQ file, add a mono-WAVE with 8 bits per sample file with various compressions
+    if(nError == ERROR_SUCCESS)
+        nError = TestCreateArchive_WaveCompressionsTest("StormLibTest_AddWaveMonoBadTest.mpq", "AddFile-MonoBad.wav");
+
+    // Create a MPQ file, add a stereo-WAVE file with various compressions
+    if(nError == ERROR_SUCCESS)
+        nError = TestCreateArchive_WaveCompressionsTest("StormLibTest_AddWaveStereoTest.mpq", "AddFile-Stereo.wav");
 
     // Check if the listfile is always created at the end of the file table in the archive
     if(nError == ERROR_SUCCESS)

@@ -211,7 +211,7 @@ static bool BaseFile_Read(
         ssize_t bytes_read;
 
         // If the byte offset is different from the current file position,
-        // we have to update the file position
+        // we have to update the file position   xxx
         if(ByteOffset != pStream->Base.File.FilePos)
         {
             lseek64((intptr_t)pStream->Base.File.hFile, (off64_t)(ByteOffset), SEEK_SET);
@@ -447,7 +447,7 @@ static bool BaseMap_Open(TFileStream * pStream, const TCHAR * szFileName, DWORD 
 
     // Open the file for read access
     hFile = CreateFile(szFileName, FILE_READ_DATA, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if(hFile != NULL)
+    if(hFile != INVALID_HANDLE_VALUE)
     {
         // Retrieve file size. Don't allow mapping file of a zero size.
         FileSize.LowPart = GetFileSize(hFile, &FileSize.HighPart);
@@ -734,7 +734,7 @@ static bool BaseHttp_Read(
         {
             // Add range request to the HTTP headers
             // http://www.clevercomponents.com/articles/article015/resuming.asp
-            _stprintf(szRangeRequest, _T("Range: bytes=%d-%d"), dwStartOffset, dwEndOffset);
+            _stprintf(szRangeRequest, _T("Range: bytes=%u-%u"), (unsigned int)dwStartOffset, (unsigned int)dwEndOffset);
             HttpAddRequestHeaders(hRequest, szRangeRequest, 0xFFFFFFFF, HTTP_ADDREQ_FLAG_ADD_IF_NEW); 
 
             // Send the request to the server
@@ -1371,7 +1371,10 @@ static TFileStream * FlatStream_Open(const TCHAR * szFileName, DWORD dwStreamFla
     {
         // Attempt to open the base stream
         if(!pStream->BaseOpen(pStream, pStream->szFileName, dwStreamFlags))
-            return false;
+        {
+            FileStream_Close(pStream);
+            return NULL;
+        }
 
         // Load the bitmap, if required to
         if(dwStreamFlags & STREAM_FLAG_USE_BITMAP)
@@ -1669,7 +1672,7 @@ static void PartStream_Close(TBlockStream * pStream)
         
         // Make sure that the header is properly BSWAPed
         BSWAP_ARRAY32_UNSIGNED(&PartHeader, sizeof(PART_FILE_HEADER));
-        sprintf(PartHeader.GameBuildNumber, "%u", pStream->BuildNumber);
+        sprintf(PartHeader.GameBuildNumber, "%u", (unsigned int)pStream->BuildNumber);
 
         // Write the part header
         pStream->BaseWrite(pStream, &ByteOffset, &PartHeader, sizeof(PART_FILE_HEADER));
@@ -2263,7 +2266,7 @@ static TFileStream * Block4Stream_Open(const TCHAR * szFileName, DWORD dwStreamF
             if(NewBaseArray == NULL)
             {
                 SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-                return false;
+                return NULL;
             }
 
             // Copy the old base data array to the new base data array
@@ -2792,7 +2795,7 @@ bool FileStream_Replace(TFileStream * pStream, TFileStream * pNewStream)
         return false;
 
     // Now open the base file again
-    if(BaseFile_Open(pStream, pStream->szFileName, pStream->dwFlags))
+    if(!BaseFile_Open(pStream, pStream->szFileName, pStream->dwFlags))
         return false;
 
     // Cleanup the new stream

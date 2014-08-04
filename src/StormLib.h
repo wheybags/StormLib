@@ -149,6 +149,7 @@ extern "C" {
 #define ERROR_BASE_FILE_MISSING          10004  // The file is present as incremental patch file, but base file is missing
 #define ERROR_MARKED_FOR_DELETE          10005  // The file was marked as "deleted" in the MPQ
 #define ERROR_FILE_INCOMPLETE            10006  // The required file part is missing
+#define ERROR_UNKNOWN_FILE_NAMES         10007  // A name of at least one file is unknown
 
 // Values for SFileCreateArchive
 #define HASH_TABLE_SIZE_MIN         0x00000004  // Verified: If there is 1 file, hash table size is 4
@@ -426,6 +427,8 @@ typedef enum _SFileInfoClass
 //-----------------------------------------------------------------------------
 // Deprecated flags. These are going to be removed in next releases.
 
+/*
+
 STORMLIB_DEPRECATED_FLAG(DWORD, STREAM_PROVIDER_LINEAR, STREAM_PROVIDER_FLAT);
 STORMLIB_DEPRECATED_FLAG(DWORD, STREAM_PROVIDER_ENCRYPTED, STREAM_PROVIDER_MPQE);
 STORMLIB_DEPRECATED_FLAG(DWORD, MPQ_OPEN_ENCRYPTED, STREAM_PROVIDER_MPQE);
@@ -459,6 +462,7 @@ STORMLIB_DEPRECATED_FLAG(SFileInfoClass, SFILE_INFO_KEY, SFileInfoEncryptionKey)
 STORMLIB_DEPRECATED_FLAG(SFileInfoClass, SFILE_INFO_KEY_UNFIXED, SFileInfoEncryptionKeyRaw);
 STORMLIB_DEPRECATED_FLAG(SFileInfoClass, SFILE_INFO_FILETIME, SFileInfoFileTime);
 STORMLIB_DEPRECATED_FLAG(SFileInfoClass, SFILE_INFO_PATCH_CHAIN, SFileInfoPatchChain);
+*/
 
 //-----------------------------------------------------------------------------
 // Callback functions
@@ -503,6 +507,7 @@ void SetBits(TBitArray * array, unsigned int nBitPosition, unsigned int nBitLeng
 #define MPQ_HEADER_SIZE_V2    0x2C
 #define MPQ_HEADER_SIZE_V3    0x44
 #define MPQ_HEADER_SIZE_V4    0xD0
+#define MPQ_HEADER_DWORDS     (MPQ_HEADER_SIZE_V4 / 0x04)
 
 typedef struct _TMPQUserData
 {
@@ -840,7 +845,7 @@ typedef struct _TMPQArchive
     HASH_STRING    pfnHashString;               // Hashing function that will convert the file name into hash
     
     TMPQUserData   UserData;                    // MPQ user data. Valid only when ID_MPQ_USERDATA has been found
-    BYTE           HeaderData[MPQ_HEADER_SIZE_V4];  // Storage for MPQ header
+    DWORD          HeaderData[MPQ_HEADER_DWORDS];  // Storage for MPQ header
 
     DWORD          dwHETBlockSize;
     DWORD          dwBETBlockSize;

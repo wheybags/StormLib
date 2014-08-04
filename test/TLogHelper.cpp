@@ -2,7 +2,7 @@
 /* TLogHelper.cpp                         Copyright (c) Ladislav Zezula 2013 */
 /*---------------------------------------------------------------------------*/
 /* Helper class for reporting StormLib tests                                 */
-/* This file should be included directly from Test.cpp using #include        */
+/* This file should be included directly from StormTest.cpp using #include   */
 /*---------------------------------------------------------------------------*/
 /*   Date    Ver   Who  Comment                                              */
 /* --------  ----  ---  -------                                              */
@@ -287,7 +287,7 @@ int TLogHelper::PrintWithClreol(const char * szFormat, va_list argList, bool bPr
         bMessagePrinted = true;
 
     // Spit out the text in one single printf
-    printf("%s", szMessage, 0);
+    printf("%s", szMessage);
     return nError;
 }
 

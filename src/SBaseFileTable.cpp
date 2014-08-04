@@ -60,10 +60,21 @@ static int CompareFilePositions(const void * p1, const void * p2)
 {
     TMPQBlock * pBlock1 = *(TMPQBlock **)p1;
     TMPQBlock * pBlock2 = *(TMPQBlock **)p2;
+    DWORD dwFileEnd1;
+    DWORD dwFileEnd2;
 
+    // Compare file begins
     if(pBlock1->dwFilePos < pBlock2->dwFilePos)
         return -1;
     if(pBlock1->dwFilePos > pBlock2->dwFilePos)
+        return +1;
+
+    // If the files begin at the same position, compare their ends
+    dwFileEnd1 = pBlock1->dwFilePos + pBlock1->dwCSize;
+    dwFileEnd2 = pBlock2->dwFilePos + pBlock2->dwCSize;
+    if(dwFileEnd1 < dwFileEnd2)
+        return -1;
+    if(dwFileEnd1 > dwFileEnd2)
         return +1;
 
     return 0;
@@ -250,7 +261,7 @@ static DWORD GetMaxFileOffset32(TMPQArchive * ha)
     return dwMaxFileOffset;
 }
 
-static ULONGLONG DetermineArchiveSize_V1_V2(
+static ULONGLONG DetermineArchiveSize_V1(
     TMPQArchive * ha,
     TMPQHeader * pHeader,
     ULONGLONG MpqOffset,
@@ -261,24 +272,20 @@ static ULONGLONG DetermineArchiveSize_V1_V2(
     DWORD SignatureHeader = 0;
     DWORD dwArchiveSize32;
 
+    // This could only be called for MPQs version 1.0
+    assert(pHeader->wFormatVersion == MPQ_FORMAT_VERSION_1);
+
     // Check if we can rely on the archive size in the header
-    if((FileSize >> 0x20) == 0)
+    if(pHeader->dwBlockTablePos < pHeader->dwArchiveSize)
     {
-        if(pHeader->dwBlockTablePos < pHeader->dwArchiveSize)
-        {
-            // If the block table end matches the archive size, we trust the archive size
-            if(pHeader->dwBlockTablePos + (pHeader->dwBlockTableSize * sizeof(TMPQBlock)) == pHeader->dwArchiveSize)
-                return pHeader->dwArchiveSize;
+        // The block table cannot be compressed, so the sizes must match
+        if((pHeader->dwArchiveSize - pHeader->dwBlockTablePos) == (pHeader->dwBlockTableSize * sizeof(TMPQBlock)))
+            return pHeader->dwArchiveSize;
 
-            // If both block table and archive size seem to be out of the file size
-            if(pHeader->dwBlockTablePos > FileSize && pHeader->dwArchiveSize > FileSize)
-                return pHeader->dwArchiveSize;
-
-            // If the archive size in the header is less than real file size
-            dwArchiveSize32 = (DWORD)(FileSize - MpqOffset);
-            if(pHeader->dwArchiveSize <= dwArchiveSize32)
-                return pHeader->dwArchiveSize;
-        }
+        // If the archive size in the header is less than real file size
+        dwArchiveSize32 = (DWORD)(FileSize - MpqOffset);
+        if(pHeader->dwArchiveSize == dwArchiveSize32)
+            return pHeader->dwArchiveSize;
     }
 
     // Check if there is a signature header
@@ -294,55 +301,37 @@ static ULONGLONG DetermineArchiveSize_V1_V2(
     return (EndOfMpq - MpqOffset);
 }
 
-// This function converts the MPQ header so it always looks like version 4
-/*static ULONGLONG GetArchiveSize64(TMPQHeader * pHeader)
+static ULONGLONG DetermineArchiveSize_V2(
+    TMPQHeader * pHeader,
+    ULONGLONG MpqOffset,
+    ULONGLONG FileSize)
 {
-    ULONGLONG ArchiveSize = pHeader->dwHeaderSize;
-    ULONGLONG ByteOffset = pHeader->dwHeaderSize;
+    ULONGLONG EndOfMpq = FileSize;
+    DWORD dwArchiveSize32;
 
-    // If there is HET table
-    if(pHeader->HetTablePos64 != 0)
+    // This could only be called for MPQs version 2.0
+    assert(pHeader->wFormatVersion == MPQ_FORMAT_VERSION_2);
+
+    // Check if we can rely on the archive size in the header
+    if((FileSize >> 0x20) == 0)
     {
-        ByteOffset = pHeader->HetTablePos64 + pHeader->HetTableSize64;
-        if(ByteOffset > ArchiveSize)
-            ArchiveSize = ByteOffset;
+        if(pHeader->dwBlockTablePos < pHeader->dwArchiveSize)
+        {
+            if((pHeader->dwArchiveSize - pHeader->dwBlockTablePos) <= (pHeader->dwBlockTableSize * sizeof(TMPQBlock)))
+                return pHeader->dwArchiveSize;
+
+            // If the archive size in the header is less than real file size
+            dwArchiveSize32 = (DWORD)(FileSize - MpqOffset);
+            if(pHeader->dwArchiveSize <= dwArchiveSize32)
+                return pHeader->dwArchiveSize;
+        }
     }
 
-    // If there is BET table
-    if(pHeader->BetTablePos64 != 0)
-    {
-        ByteOffset = pHeader->BetTablePos64 + pHeader->BetTableSize64;
-        if(ByteOffset > ArchiveSize)
-            ArchiveSize = ByteOffset;
-    }
-
-    // If there is hash table
-    if(pHeader->dwHashTablePos || pHeader->wHashTablePosHi)
-    {
-        ByteOffset = MAKE_OFFSET64(pHeader->wHashTablePosHi, pHeader->dwHashTablePos) + pHeader->HashTableSize64;
-        if(ByteOffset > ArchiveSize)
-            ArchiveSize = ByteOffset;
-    }
-
-    // If there is block table
-    if(pHeader->dwBlockTablePos || pHeader->wBlockTablePosHi)
-    {
-        ByteOffset = MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos) + pHeader->BlockTableSize64;
-        if(ByteOffset > ArchiveSize)
-            ArchiveSize = ByteOffset;
-    }
-
-    // If there is hi-block table
-    if(pHeader->HiBlockTablePos64)
-    {
-        ByteOffset = pHeader->HiBlockTablePos64 + pHeader->HiBlockTableSize64;
-        if(ByteOffset > ArchiveSize)
-            ArchiveSize = ByteOffset;
-    }
-
-    return ArchiveSize;
+    // Return the calculated archive size
+    return (EndOfMpq - MpqOffset);
 }
-*/
+
+// This function converts the MPQ header so it always looks like version 4
 int ConvertMpqHeaderToFormat4(
     TMPQArchive * ha,
     ULONGLONG MpqOffset,
@@ -352,6 +341,7 @@ int ConvertMpqHeaderToFormat4(
     TMPQHeader * pHeader = (TMPQHeader *)ha->HeaderData;
     ULONGLONG BlockTablePos64 = 0;
     ULONGLONG HashTablePos64 = 0;
+    ULONGLONG BlockTableMask = (ULONGLONG)-1;
     ULONGLONG ByteOffset;
     USHORT wFormatVersion = BSWAP_INT16_UNSIGNED(pHeader->wFormatVersion);
     int nError = ERROR_SUCCESS;
@@ -368,8 +358,9 @@ int ConvertMpqHeaderToFormat4(
 
             // Check for malformed MPQ header version 1.0
             BSWAP_TMPQHEADER(pHeader, MPQ_FORMAT_VERSION_1);
-            if(pHeader->dwHeaderSize != MPQ_HEADER_SIZE_V1)
+            if(pHeader->wFormatVersion != MPQ_FORMAT_VERSION_1 || pHeader->dwHeaderSize != MPQ_HEADER_SIZE_V1)
             {
+                pHeader->wFormatVersion = MPQ_FORMAT_VERSION_1;
                 pHeader->dwHeaderSize = MPQ_HEADER_SIZE_V1;
                 ha->dwFlags |= MPQ_FLAG_MALFORMED;
             }
@@ -394,10 +385,16 @@ int ConvertMpqHeaderToFormat4(
             pHeader->HashTableSize64 = pHeader->dwHashTableSize * sizeof(TMPQHash);
             pHeader->ArchiveSize64 = pHeader->dwArchiveSize;
             
+            // Block table position must be calculated as 32-bit value
+            // Note: BOBA protector puts block table before the MPQ header, so it is negative
+            BlockTablePos64 = (ULONGLONG)((DWORD)MpqOffset + pHeader->dwBlockTablePos);
+            BlockTableMask = 0xFFFFFFF0;
+
             // Determine the archive size on malformed MPQs
             if(ha->dwFlags & MPQ_FLAG_MALFORMED)
             {
-                pHeader->ArchiveSize64 = DetermineArchiveSize_V1_V2(ha, pHeader, MpqOffset, FileSize);
+                // Calculate the archive size
+                pHeader->ArchiveSize64 = DetermineArchiveSize_V1(ha, pHeader, MpqOffset, FileSize);
                 pHeader->dwArchiveSize = (DWORD)pHeader->ArchiveSize64;
             }
             break;
@@ -406,8 +403,9 @@ int ConvertMpqHeaderToFormat4(
 
             // Check for malformed MPQ header version 1.0
             BSWAP_TMPQHEADER(pHeader, MPQ_FORMAT_VERSION_2);
-            if(pHeader->dwHeaderSize != MPQ_HEADER_SIZE_V2)
+            if(pHeader->wFormatVersion != MPQ_FORMAT_VERSION_2 || pHeader->dwHeaderSize != MPQ_HEADER_SIZE_V2)
             {
+                pHeader->wFormatVersion = MPQ_FORMAT_VERSION_1;
                 pHeader->dwHeaderSize = MPQ_HEADER_SIZE_V1;
                 ha->dwFlags |= MPQ_FLAG_MALFORMED;
                 goto Label_ArchiveVersion1;
@@ -435,12 +433,12 @@ int ConvertMpqHeaderToFormat4(
                 if(pHeader->HiBlockTablePos64 != 0)
                 {
                     // BlockTableSize64 may be less than TblSize * sizeof(TMPQBlock).
-                    // That means that the hi-block table is compressed.
+                    // That means that the block table is compressed.
                     pHeader->BlockTableSize64 = pHeader->HiBlockTablePos64 - BlockTablePos64;
                     assert(pHeader->BlockTableSize64 <= (pHeader->dwBlockTableSize * sizeof(TMPQBlock)));
 
                     // Determine real archive size
-                    pHeader->ArchiveSize64 = DetermineArchiveSize_V1_V2(ha, pHeader, MpqOffset, FileSize);
+                    pHeader->ArchiveSize64 = DetermineArchiveSize_V2(pHeader, MpqOffset, FileSize);
 
                     // Calculate the size of the hi-block table
                     pHeader->HiBlockTableSize64 = pHeader->ArchiveSize64 - pHeader->HiBlockTablePos64;
@@ -449,7 +447,7 @@ int ConvertMpqHeaderToFormat4(
                 else
                 {
                     // Determine real archive size
-                    pHeader->ArchiveSize64 = DetermineArchiveSize_V1_V2(ha, pHeader, MpqOffset, FileSize);
+                    pHeader->ArchiveSize64 = DetermineArchiveSize_V2(pHeader, MpqOffset, FileSize);
 
                     // Calculate size of the block table
                     pHeader->BlockTableSize64 = pHeader->ArchiveSize64 - BlockTablePos64;
@@ -461,6 +459,9 @@ int ConvertMpqHeaderToFormat4(
                 pHeader->ArchiveSize64 = pHeader->dwArchiveSize;
                 ha->dwFlags |= MPQ_FLAG_MALFORMED;
             }
+
+            // Add the MPQ Offset
+            BlockTablePos64 += MpqOffset;
             break;
 
         case MPQ_FORMAT_VERSION_3:
@@ -487,6 +488,8 @@ int ConvertMpqHeaderToFormat4(
 
             // Fill the rest of the header with zeros
             memset((LPBYTE)pHeader + MPQ_HEADER_SIZE_V3, 0, sizeof(TMPQHeader) - MPQ_HEADER_SIZE_V3);
+            BlockTablePos64 = MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos);
+            HashTablePos64 = MAKE_OFFSET64(pHeader->wHashTablePosHi, pHeader->dwHashTablePos);
             ByteOffset = pHeader->ArchiveSize64;
 
             // Size of the hi-block table
@@ -497,17 +500,17 @@ int ConvertMpqHeaderToFormat4(
             }
 
             // Size of the block table
-            if(pHeader->wBlockTablePosHi || pHeader->dwBlockTablePos)
+            if(BlockTablePos64)
             {
-                pHeader->BlockTableSize64 = ByteOffset - MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos);
-                ByteOffset = MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos);
+                pHeader->BlockTableSize64 = ByteOffset - BlockTablePos64;
+                ByteOffset = BlockTablePos64;
             }
 
             // Size of the hash table
-            if(pHeader->wHashTablePosHi || pHeader->dwHashTablePos)
+            if(HashTablePos64)
             {
-                pHeader->HashTableSize64 = ByteOffset - MAKE_OFFSET64(pHeader->wHashTablePosHi, pHeader->dwHashTablePos);
-                ByteOffset = MAKE_OFFSET64(pHeader->wHashTablePosHi, pHeader->dwHashTablePos);
+                pHeader->HashTableSize64 = ByteOffset - HashTablePos64;
+                ByteOffset = HashTablePos64;
             }
 
             // Size of the BET table
@@ -523,6 +526,9 @@ int ConvertMpqHeaderToFormat4(
                 pHeader->HetTableSize64 = ByteOffset - pHeader->HetTablePos64;
 //              ByteOffset = pHeader->HetTablePos64;
             }
+            
+            // Add the MPQ Offset
+            BlockTablePos64 += MpqOffset;
             break;
 
         case MPQ_FORMAT_VERSION_4:
@@ -532,13 +538,42 @@ int ConvertMpqHeaderToFormat4(
             BSWAP_TMPQHEADER(pHeader, MPQ_FORMAT_VERSION_4);
             if(!VerifyDataBlockHash(pHeader, MPQ_HEADER_SIZE_V4 - MD5_DIGEST_SIZE, pHeader->MD5_MpqHeader))
                 nError = ERROR_FILE_CORRUPT;
+
+            // Calculate the block table position
+            BlockTablePos64 = MpqOffset + MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos);
             break;
 
         default:
 
-            // Last resort: Check if it's a War of the Immortal data file (SQP)
-            nError = ConvertSqpHeaderToFormat4(ha, FileSize, dwFlags);
+            // Check if it's a War of the Immortal data file (SQP)
+            // If not, we treat it as malformed MPQ version 1.0
+            if(ConvertSqpHeaderToFormat4(ha, FileSize, dwFlags) != ERROR_SUCCESS)
+            {
+                pHeader->wFormatVersion = MPQ_FORMAT_VERSION_1;
+                pHeader->dwHeaderSize = MPQ_HEADER_SIZE_V1;
+                ha->dwFlags |= MPQ_FLAG_MALFORMED;
+                goto Label_ArchiveVersion1;
+            }
+
+            // Calculate the block table position
+            BlockTablePos64 = MpqOffset + MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos);
             break;
+    }
+
+    // Handle case when block table is placed before the MPQ header
+    // Used by BOBA protector
+    if(BlockTablePos64 < MpqOffset)
+    {
+        pHeader->BlockTableSize64 = (MpqOffset - BlockTablePos64) & BlockTableMask;
+        pHeader->dwBlockTableSize = (DWORD)(pHeader->BlockTableSize64 / sizeof(TMPQBlock));
+    }
+
+    // Handle case when either the MPQ is cut in the middle of the block table
+    // or the MPQ is malformed so that block table size is greater than should be
+    if((BlockTablePos64 + pHeader->BlockTableSize64) > FileSize)
+    {
+        pHeader->BlockTableSize64 = (FileSize - BlockTablePos64) & BlockTableMask;
+        pHeader->dwBlockTableSize = (DWORD)(pHeader->BlockTableSize64 / sizeof(TMPQBlock));
     }
 
     return nError;
@@ -1812,8 +1847,8 @@ TFileEntry * AllocateFileEntry(TMPQArchive * ha, const char * szFileName, LCID l
             if((ha->dwFileTableSize + ha->dwReservedFiles) >= ha->dwMaxFileCount)
                 return NULL;
 
-            // Invalidate the internal files. Then we need to search for a deleted entry again,
-            // because the previous call to InvalidateInternalFiles might have created some
+            // Invalidate the internal files so we free
+            // their file entries.
             InvalidateInternalFiles(ha);
 
             // Re-check for deleted entries
@@ -1821,7 +1856,7 @@ TFileEntry * AllocateFileEntry(TMPQArchive * ha, const char * szFileName, LCID l
             if(pFileEntry == NULL)
             {
                 // If there is still no deleted entry, we allocate an entry at the end of the file table
-                assert((ha->dwFileTableSize + ha->dwReservedFiles) < ha->dwMaxFileCount);
+                assert((ha->dwFileTableSize + ha->dwReservedFiles) <= ha->dwMaxFileCount);
                 pFileEntry = ha->pFileTable + ha->dwFileTableSize++;
             }
         }
@@ -1834,7 +1869,7 @@ TFileEntry * AllocateFileEntry(TMPQArchive * ha, const char * szFileName, LCID l
     else
     {
         // There should be at least one entry for that internal file
-        assert((ha->dwFileTableSize + ha->dwReservedFiles) < ha->dwMaxFileCount);
+        assert((ha->dwFileTableSize + ha->dwReservedFiles) <= ha->dwMaxFileCount);
         pFileEntry = ha->pFileTable + ha->dwFileTableSize++;
     }
 
@@ -1950,8 +1985,9 @@ void DeleteFileEntry(
 
 void InvalidateInternalFiles(TMPQArchive * ha)
 {
-    TFileEntry * pFileEntry;
-    DWORD dwReservedFiles = 0;
+    TFileEntry * pFileTableEnd;
+    TFileEntry * pFileEntry1 = NULL;
+    TFileEntry * pFileEntry2 = NULL;
 
     // Do nothing if we are in the middle of saving internal files
     if(!(ha->dwFlags & MPQ_FLAG_SAVING_TABLES))
@@ -1963,54 +1999,49 @@ void InvalidateInternalFiles(TMPQArchive * ha)
         //
 
         // Invalidate the (listfile), if not done yet
-        if(!(ha->dwFlags & MPQ_FLAG_LISTFILE_INVALID))
+        if(ha->dwFileFlags1 != 0 && (ha->dwFlags & MPQ_FLAG_LISTFILE_INVALID) == 0)
         {
-            pFileEntry = GetFileEntryExact(ha, LISTFILE_NAME, LANG_NEUTRAL);
-            if(pFileEntry != NULL)
-            {
-                DeleteFileEntry(ha, pFileEntry);
-                dwReservedFiles++;
-            }
+            // Delete the existing entry for (listfile)
+            pFileEntry1 = GetFileEntryExact(ha, LISTFILE_NAME, LANG_NEUTRAL);
+            if(pFileEntry1 != NULL)
+                DeleteFileEntry(ha, pFileEntry1);
 
+            // Reserve one entry for (listfile)
             ha->dwFlags |= MPQ_FLAG_LISTFILE_INVALID;
+            ha->dwReservedFiles++;
         }
 
         // Invalidate the (attributes), if not done yet
-        if(!(ha->dwFlags & MPQ_FLAG_ATTRIBUTES_INVALID))
+        if(ha->dwFileFlags2 != 0 && (ha->dwFlags & MPQ_FLAG_ATTRIBUTES_INVALID) == 0)
         {
-            pFileEntry = GetFileEntryExact(ha, ATTRIBUTES_NAME, LANG_NEUTRAL);
-            if(pFileEntry != NULL)
-            {
-                DeleteFileEntry(ha, pFileEntry);
-                dwReservedFiles++;
-            }
+            // Delete the existing entry for (attributes)
+            pFileEntry2 = GetFileEntryExact(ha, ATTRIBUTES_NAME, LANG_NEUTRAL);
+            if(pFileEntry2 != NULL)
+                DeleteFileEntry(ha, pFileEntry2);
 
+            // Reserve one entry for (attributes)
             ha->dwFlags |= MPQ_FLAG_ATTRIBUTES_INVALID;
+            ha->dwReservedFiles++;
         }
 
         // If the internal files are at the end of the file table (they usually are),
         // we want to free these 2 entries, so when new files are added, they get
         // added to the freed entries and the internal files get added after that
-        if(ha->dwFileTableSize > 0 && dwReservedFiles != 0)
+        if(ha->dwFileTableSize > 0)
         {
-            // Go backwards while there are free entries
-            for(pFileEntry = ha->pFileTable + ha->dwFileTableSize - 1; pFileEntry >= ha->pFileTable; pFileEntry--)
-            {
-                // Stop searching if a file is present
-                if(pFileEntry->dwFlags & MPQ_FILE_EXISTS)
-                {
-                    pFileEntry++;
-                    break;
-                }
-            }
+            pFileTableEnd = ha->pFileTable + ha->dwFileTableSize;
+
+            // Is one of the entries the last one?
+            if(pFileEntry1 == pFileTableEnd - 1 || pFileEntry2 == pFileTableEnd - 1)
+                pFileTableEnd--;
+            if(pFileEntry1 == pFileTableEnd - 1 || pFileEntry2 == pFileTableEnd - 1)
+                pFileTableEnd--;
 
             // Calculate the new file table size
-            ha->dwFileTableSize = (DWORD)(pFileEntry - ha->pFileTable);
-            ha->dwReservedFiles = dwReservedFiles;
+            ha->dwFileTableSize = (DWORD)(pFileTableEnd - ha->pFileTable);
         }
 
-        // Remember that the MPQ has been changed and it will be necessary
-        // to update the tables
+        // Remember that the MPQ has been changed
         ha->dwFlags |= MPQ_FLAG_CHANGED;
     }
 }
@@ -2174,7 +2205,7 @@ static void FixCompressedFileSize(
                 SortTable[nElements++] = pBlock;
         }
 
-        // Have we found at least one compressed
+        // Have we found at least one block?
         if(nElements > 0)
         {
             // Sort the table
@@ -2205,7 +2236,6 @@ TMPQBlock * LoadBlockTable(TMPQArchive * ha, bool bDontFixEntries)
     TMPQHeader * pHeader = ha->pHeader;
     TMPQBlock * pBlockTable = NULL;
     ULONGLONG ByteOffset;
-    ULONGLONG FileSize;
     DWORD dwTableSize;
     DWORD dwCmpSize;
 
@@ -2222,21 +2252,15 @@ TMPQBlock * LoadBlockTable(TMPQArchive * ha, bool bDontFixEntries)
     {
         case MPQ_SUBTYPE_MPQ:
 
-            // Calculate sizes of both tables
+            // Calculate byte position of the block table
             ByteOffset = ha->MpqPos + MAKE_OFFSET64(pHeader->wBlockTablePosHi, pHeader->dwBlockTablePos);
+            if((pHeader->wFormatVersion == MPQ_FORMAT_VERSION_1) && (ha->dwFlags & MPQ_FLAG_MALFORMED))
+                ByteOffset = (DWORD)ha->MpqPos + pHeader->dwBlockTablePos;
+            
+            // Calculate full and compressed size of the block table
             dwTableSize = pHeader->dwBlockTableSize * sizeof(TMPQBlock);
             dwCmpSize = (DWORD)pHeader->BlockTableSize64;
-
-            // Handle case when either the MPQ is cut in the middle of the block table
-            // or the MPQ is malformed so that block table size is greater than should be
-            FileStream_GetSize(ha->pStream, &FileSize);
-            if(dwTableSize == dwCmpSize && (ByteOffset + dwTableSize) > FileSize)
-            {
-                pHeader->BlockTableSize64 = FileSize - ByteOffset;
-                pHeader->dwBlockTableSize = (DWORD)(pHeader->BlockTableSize64 / sizeof(TMPQBlock));
-                dwTableSize = dwCmpSize = (DWORD)pHeader->BlockTableSize64;
-                ha->dwFlags |= MPQ_FLAG_MALFORMED;
-            }
+            assert((ByteOffset + dwCmpSize) <= (ha->MpqPos + ha->pHeader->ArchiveSize64));
 
             //
             // One of the first cracked versions of Diablo I had block table unencrypted 
@@ -2544,19 +2568,23 @@ int BuildFileTable_HetBet(
 int BuildFileTable(TMPQArchive * ha)
 {
     TFileEntry * pFileTable;
+    DWORD dwFileTableSize;
     bool bFileTableCreated = false;
 
     // Sanity checks
     assert(ha->dwFileTableSize == 0);
     assert(ha->dwMaxFileCount != 0);
 
+    // Determine the allocation size for the file table
+    dwFileTableSize = STORMLIB_MAX(ha->pHeader->dwBlockTableSize, ha->dwMaxFileCount);
+
     // Allocate the file table with size determined before
-    pFileTable = STORM_ALLOC(TFileEntry, ha->dwMaxFileCount);
+    pFileTable = STORM_ALLOC(TFileEntry, dwFileTableSize);
     if(pFileTable == NULL)
         return ERROR_NOT_ENOUGH_MEMORY;
 
     // Fill the table with zeros
-    memset(pFileTable, 0, ha->dwMaxFileCount * sizeof(TFileEntry));
+    memset(pFileTable, 0, dwFileTableSize * sizeof(TFileEntry));
 
     // If we have HET table, we load file table from the BET table
     // Note: If BET table is corrupt or missing, we set the archive as read only

@@ -263,6 +263,7 @@
 //-----------------------------------------------------------------------------
 // Macro for deprecated symbols
 
+/*
 #ifdef _MSC_VER
   #if _MSC_FULL_VER >= 140050320
     #define STORMLIB_DEPRECATED(_Text) __declspec(deprecated(_Text))
@@ -270,15 +271,20 @@
     #define STORMLIB_DEPRECATED(_Text) __declspec(deprecated)
   #endif
 #else
-  #define STORMLIB_DEPRECATED(_Text) __attribute__((deprecated(_Text)))
+  #ifdef __GNUC__
+    #define STORMLIB_DEPRECATED(_Text) __attribute__((deprecated))
+  #else
+    #define STORMLIB_DEPRECATED(_Text) __attribute__((deprecated(_Text)))
+  #endif
 #endif
 
 // When a flag is deprecated, use this macro
 #ifndef _STORMLIB_NO_DEPRECATE
   #define STORMLIB_DEPRECATED_FLAG(type, oldflag, newflag)    \
-    const STORMLIB_DEPRECATED(#oldflag " is deprecated. Use " #newflag ". To supress this warning, define _STORMLIB_NO_DEPRECATE") type oldflag = (type)newflag;
+    const STORMLIB_DEPRECATED(#oldflag " is deprecated. Use " #newflag ". To supress this warning, define _STORMLIB_NO_DEPRECATE") static type oldflag = (type)newflag;
 #else
-  #define STORMLIB_DEPRECATED_FLAG(type, oldflag, newflag) const type oldflag = (type)newflag;
+#define STORMLIB_DEPRECATED_FLAG(type, oldflag, newflag) static type oldflag = (type)newflag;
 #endif
+*/
 
 #endif // __STORMPORT_H__
