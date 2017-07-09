@@ -100,7 +100,7 @@ extern "C" {
 //
 
 #if defined(_MSC_VER) && !defined(__STORMLIB_SELF__)
-  
+/*  
   #ifdef _DEBUG                                 // DEBUG VERSIONS
     #ifndef _UNICODE                            
       #ifdef _DLL                               
@@ -130,7 +130,7 @@ extern "C" {
       #endif
     #endif
   #endif
-
+*/
 #endif
 
 //-----------------------------------------------------------------------------

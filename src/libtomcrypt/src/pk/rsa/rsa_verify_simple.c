@@ -8,7 +8,7 @@
  *
  * Tom St Denis, tomstdenis@gmail.com, http://libtom.org
  */
-#include "../../headers/tomcrypt.h"
+#include <tomcrypt.h>
 
 /**
   @file rsa_verify_simple.c

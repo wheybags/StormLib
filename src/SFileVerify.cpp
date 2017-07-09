@@ -17,6 +17,8 @@
 #include "StormLib.h"
 #include "StormCommon.h"
 
+#include "thirdparty_extra_funcs.h"
+
 //-----------------------------------------------------------------------------
 // Local defines
 
