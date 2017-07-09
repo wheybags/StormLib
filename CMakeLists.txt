@@ -6,7 +6,12 @@ HunterGate(
     SHA1 "59cd3223f10ee630bc3596709a22f2fea4926a7c"
 )
 
-project(StormLib)
+SET(VERSION_MAJOR "9")
+SET(VERSION_MINOR "20")
+SET(VERSION_PATCH "0")
+SET(VERSION_STRING "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
+
+project(StormLib VERSION "${VERSION_STRING}")
 
 set(LIBRARY_NAME stormlib)
 
@@ -95,10 +100,6 @@ if(BUILD_SHARED_LIBS)
         set_target_properties(${LIBRARY_NAME} PROPERTIES LINK_FLAGS "-framework Carbon")
     endif()
     if(UNIX)
-        SET(VERSION_MAJOR "9")
-        SET(VERSION_MINOR "20")
-        SET(VERSION_PATCH "0")
-        SET(VERSION_STRING "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
         set_target_properties(${LIBRARY_NAME} PROPERTIES VERSION "${VERSION_STRING}")
         set_target_properties(${LIBRARY_NAME} PROPERTIES SOVERSION "${VERSION_MAJOR}")
     endif()
