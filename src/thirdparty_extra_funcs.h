@@ -4,7 +4,7 @@
 
 // orignally added to tomcrypt_pk.h
 /* Ladik: Added for verifying Blizzard strong signature verification */
-int rsa_verify_simple(const unsigned char *sig,  unsigned long siglen,
+extern "C" int rsa_verify_simple(const unsigned char *sig,  unsigned long siglen,
                       const unsigned char *hash, unsigned long hashlen,
                             int           *stat,
 							rsa_key *key);

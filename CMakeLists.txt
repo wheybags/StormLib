@@ -82,6 +82,10 @@ find_package(tomcrypt CONFIG REQUIRED)
 
 set(LINK_LIBS ZLIB::zlib BZip2::bz2 tomcrypt::tomcrypt)
 
+if(WIN32)
+    set(LINK_LIBS "${LINK_LIBS}" wininet)
+endif()
+
 if(${CMAKE_SYSTEM_NAME} STREQUAL FreeBSD)
     message(STATUS "Using FreeBSD port")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DO_LARGEFILE=0 -Dstat64=stat -Dlstat64=lstat -Dlseek64=lseek -Doff64_t=off_t -Dfstat64=fstat -Dftruncate64=ftruncate")

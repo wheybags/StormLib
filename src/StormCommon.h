@@ -34,18 +34,13 @@
 #include "lzma/C/LzmaDec.h"
 
 // Include functions from zlib
-#ifndef __SYS_ZLIB
-  #include "zlib/zlib.h"
-#else
-  #include <zlib.h>
-#endif
+#include <zlib.h>
 
 // Include functions from bzlib
-#ifndef __SYS_BZLIB
-  #include "bzip2/bzlib.h"
-#else
-  #include <bzlib.h>
+#ifdef small
+    #undef small
 #endif
+#include <bzlib.h>
 
 //-----------------------------------------------------------------------------
 // Cryptography support
